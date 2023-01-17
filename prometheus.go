@@ -47,6 +47,7 @@ const (
 	workerDurationMetricName                     MetricName = "cloudflare_worker_duration"
 	poolHealthStatusMetricName                   MetricName = "cloudflare_zone_pool_health_status"
 	poolRequestsTotalMetricName                  MetricName = "cloudflare_zone_pool_requests_total"
+	logpushFailedJobsMetricName                  MetricName = "cloudflare_logpush_failed_jobs"
 )
 
 type MetricsSet map[MetricName]struct{}
@@ -243,6 +244,13 @@ var (
 	},
 		[]string{"zone", "load_balancer_name", "pool_name", "origin_name"},
 	)
+
+	logpushFailedJobs = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: logpushFailedJobsMetricName.String(),
+		Help: "Reports the status of Logpush jobs, 1 for failed, 0 for success.",
+	},
+		[]string{"destination", "job_id"},
+	)
 )
 
 func buildAllMetricsSet() MetricsSet {
@@ -277,6 +285,7 @@ func buildAllMetricsSet() MetricsSet {
 	allMetricsSet.Add(workerDurationMetricName)
 	allMetricsSet.Add(poolHealthStatusMetricName)
 	allMetricsSet.Add(poolRequestsTotalMetricName)
+	allMetricsSet.Add(logpushFailedJobsMetricName)
 	return allMetricsSet
 }
 
@@ -383,6 +392,9 @@ func mustRegisterMetrics(deniedMetrics MetricsSet) {
 	if !deniedMetrics.Has(poolRequestsTotalMetricName) {
 		prometheus.MustRegister(poolRequestsTotal)
 	}
+	if !deniedMetrics.Has(logpushFailedJobsMetricName) {
+		prometheus.MustRegister(logpushFailedJobs)
+	}
 }
 
 func fetchWorkerAnalytics(account cloudflare.Account, wg *sync.WaitGroup) {
@@ -408,6 +420,28 @@ func fetchWorkerAnalytics(account cloudflare.Account, wg *sync.WaitGroup) {
 			workerDuration.With(prometheus.Labels{"script_name": w.Dimensions.ScriptName, "quantile": "P999"}).Set(float64(w.Quantiles.DurationP999))
 		}
 	}
+}
+
+func fetchLogpushAnalyticsForAccount(account cloudflare.Account, wg *sync.WaitGroup) {
+	wg.Add(1)
+	defer wg.Done()
+
+	r, err := fetchLogpushAccount(account.ID)
+
+	if err != nil {
+		return
+	}
+
+	for _, account := range r.Viewer.Accounts {
+		for _, LogpushHealthAdaptiveGroup := range account.LogpushHealthAdaptiveGroups {
+			logpushFailedJobs.With(prometheus.Labels{"destination": LogpushHealthAdaptiveGroup.Dimensions.DestinationType, "job_id": strconv.Itoa(LogpushHealthAdaptiveGroup.Dimensions.JobId)}).Set(1)
+		}
+	}
+
+}
+
+func fetchLogpushAnalyticsForZone(zones []cloudflare.Zone, wg *sync.WaitGroup) {
+
 }
 
 func fetchZoneColocationAnalytics(zones []cloudflare.Zone, wg *sync.WaitGroup) {

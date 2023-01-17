@@ -61,6 +61,19 @@ type accountResp struct {
 			DurationP999 float32 `json:"durationP999"`
 		} `json:"quantiles"`
 	} `json:"workersInvocationsAdaptive"`
+
+	// Add something for logpushHealthAdaptiveGroups
+
+	LogpushHealthAdaptiveGroups []struct {
+		Count uint64 `json:"count"`
+
+		Dimensions struct {
+			Datetime        string `json:"datetime"`
+			DestinationType string `json:"destinationType"`
+			JobId           int    `json:"jobId"`
+			Status          int    `json:"status"`
+		}
+	} `json:"logpushHealthAdaptiveGroups"`
 }
 
 type zoneRespColo struct {
@@ -572,6 +585,58 @@ func fetchLoadBalancerTotals(zoneIDs []string) (*cloudflareResponseLb, error) {
 	ctx := context.Background()
 	graphqlClient := graphql.NewClient(cfGraphQLEndpoint)
 	var resp cloudflareResponseLb
+	if err := graphqlClient.Run(ctx, request, &resp); err != nil {
+		log.Error(err)
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func fetchLogpushAccount(accountID string) (*cloudflareResponseAccts, error) {
+
+	now := time.Now().Add(-time.Duration(cfgScrapeDelay) * time.Second).UTC()
+	s := 60 * time.Second
+	now = now.Truncate(s)
+	now1mAgo := now.Add(-60 * time.Second)
+
+	request := graphql.NewRequest(`query($accountID: String!, $limit: Int!, $mintime: Time!, $maxtime: Time!) {
+		viewer {
+		  accounts(filter: {accountTag : $accountID }) {
+			logpushHealthAdaptiveGroups(
+			  filter: {
+				datetime_geq: $mintime
+				datetime_lt: $maxtime
+				status_neq: 200
+			  }
+			  limit: $limit
+			) {
+			  count
+			  dimensions {
+				jobId
+				status
+				destinationType
+				datetime
+			  }
+			}
+		  }
+		}
+	  }`)
+
+	if len(cfgCfAPIToken) > 0 {
+		request.Header.Set("Authorization", "Bearer "+cfgCfAPIToken)
+	} else {
+		request.Header.Set("X-AUTH-EMAIL", cfgCfAPIEmail)
+		request.Header.Set("X-AUTH-KEY", cfgCfAPIKey)
+	}
+
+	request.Var("accountID", accountID)
+	request.Var("limit", 9999)
+	request.Var("maxtime", now)
+	request.Var("mintime", now1mAgo)
+
+	ctx := context.Background()
+	graphqlClient := graphql.NewClient(cfGraphQLEndpoint)
+	var resp cloudflareResponseAccts
 	if err := graphqlClient.Run(ctx, request, &resp); err != nil {
 		log.Error(err)
 		return nil, err
